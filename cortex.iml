@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<module type="GENERAL_MODULE" version="4">
+  <component name="FacetManager">
+    <facet type="Python" name="Python">
+      <configuration sdkName="~\OneDrive\Desktop\Moitui\m.projects\nova\.venv" />
+    </facet>
+  </component>
+  <component name="NewModuleRootManager" inherit-compiler-output="true">
+    <exclude-output />
+    <content url="file://$MODULE_DIR$">
+      <sourceFolder url="file://$MODULE_DIR$/cortex-brain" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/cortex-brain/venv/Lib/site-packages/pip/_vendor" isTestSource="false" />
+      <excludeFolder url="file://$MODULE_DIR$/.venv" />
+    </content>
+    <orderEntry type="sourceFolder" forTests="false" />
+    <orderEntry type="library" name="~\OneDrive\Desktop\Moitui\m.projects\nova\.venv interpreter library" level="application" />
+  </component>
+</module>

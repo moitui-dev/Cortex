@@ -1,0 +1,15 @@
+version: '3.8'
+
+services:
+  cortex-brain:
+    build:
+      context: ./cortex-brain
+    container_name: cortex_brain_server
+    ports:
+      - "8000:8000"
+    environment:
+      - CORTEX_USE_CLOUD=true
+      - CORTEX_API_KEY=${CORTEX_API_KEY}
+    volumes:
+      - ./cortex-brain/data:/app/data
+    restart: always
