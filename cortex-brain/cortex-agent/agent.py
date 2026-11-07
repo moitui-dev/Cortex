@@ -1,142 +1,221 @@
-import os
 import sys
 import threading
-import queue
-import pyttsx3
 import requests
-from PyQt5.QtCore import Qt, QThread, pyqtSignal
-from PyQt5.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QTextEdit, QLineEdit, QPushButton, QLabel, QTabWidget
+import pyttsx3
+from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
+                             QHBoxLayout, QTextEdit, QLineEdit, QPushButton,
+                             QLabel, QSlider, QCheckBox, QTabWidget, QGroupBox, QFormLayout, QComboBox)
+from PyQt5.QtCore import Qt, QTimer, QRectF
+from PyQt5.QtGui import QPainter, QColor, QBrush
 
-# Try importing whisper for offline speech-to-text
-try:
-    import whisper
-    WHISPER_AVAILABLE = True
-except ImportError:
-    WHISPER_AVAILABLE = False
+DARK_THEME_STYLE = """
+QMainWindow, QWidget { background-color: #0d1117; color: #c9d1d9; font-family: 'Segoe UI', sans-serif; font-size: 10pt; }
+QTabWidget::pane { border: 1px solid #30363d; background-color: #161b22; }
+QTabBar::tab { background-color: #21262d; color: #8b949e; padding: 8px 16px; border-top-left-radius: 4px; border-top-right-radius: 4px; margin-right: 2px; }
+QTabBar::tab:selected { background-color: #161b22; color: #f0f6fc; border-bottom: 2px solid #238636; }
+QTextEdit { background-color: #0d1117; color: #f0f6fc; border: 1px solid #30363d; border-radius: 6px; padding: 8px; }
+QLineEdit { background-color: #161b22; color: #f0f6fc; border: 1px solid #30363d; border-radius: 6px; padding: 8px; }
+QPushButton { background-color: #238636; color: #ffffff; border: none; border-radius: 6px; padding: 8px 16px; font-weight: bold; }
+QPushButton:hover { background-color: #2ea043; }
+QPushButton#clear_btn { background-color: #da3633; }
+QPushButton#clear_btn:hover { background-color: #f85149; }
+QLabel { color: #c9d1d9; }
+QComboBox { background-color: #161b22; color: #f0f6fc; border: 1px solid #30363d; border-radius: 4px; padding: 4px; }
+QSlider::groove:horizontal { border: 1px solid #30363d; height: 6px; background: #161b22; border-radius: 3px; }
+QSlider::handle:horizontal { background: #58a6ff; border: none; width: 14px; margin: -4px 0; border-radius: 7px; }
+"""
 
-class CortexAgentClient(QMainWindow):
+class VisualOrb(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(50, 50)
+        self.pulse = 0
+        self.state_color = QColor(0, 255, 100)
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.animate)
+        self.timer.start(50)
+
+    def animate(self):
+        self.pulse = (self.pulse + 5) % 360
+        self.update()
+
+    def set_state(self, mode):
+        if mode == "active":
+            self.state_color = QColor(88, 166, 255)
+        elif mode == "speaking":
+            self.state_color = QColor(255, 123, 114)
+        else:
+            self.state_color = QColor(0, 255, 100)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        glow_alpha = int(100 + 50 * abs(3.14 - (self.pulse * 3.14 / 180.0)))
+        glow_color = QColor(self.state_color)
+        glow_color.setAlpha(glow_alpha)
+        painter.setBrush(QBrush(glow_color))
+        painter.setPen(Qt.NoPen)
+        painter.drawEllipse(QRectF(2, 2, 46, 46))
+        painter.setBrush(QBrush(self.state_color))
+        painter.drawEllipse(QRectF(10, 10, 30, 30))
+
+class SpeechEngine:
+    def __init__(self):
+        try:
+            self.tts = pyttsx3.init()
+        except Exception:
+            self.tts = None
+        self.is_speaking = False
+
+    def speak(self, text, speed=175, voice_index=0, callback=None):
+        if not self.tts:
+            if callback: callback()
+            return
+        self.stop()
+        self.is_speaking = True
+        self.tts.setProperty('rate', speed)
+
+        try:
+            voices = self.tts.getProperty('voices')
+            if voices and len(voices) > voice_index:
+                self.tts.setProperty('voice', voices[voice_index].id)
+        except Exception:
+            pass
+
+        def run_tts():
+            try:
+                self.tts.say(text)
+                self.tts.runAndWait()
+            except Exception:
+                pass
+            self.is_speaking = False
+            if callback: callback()
+
+        threading.Thread(target=run_tts, daemon=True).start()
+
+    def stop(self):
+        if self.is_speaking and self.tts:
+            try:
+                self.tts.stop()
+            except Exception:
+                pass
+            self.is_speaking = False
+
+class CortexUI(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Cortex OS — Executive Suite (Hybrid + Auto-Interrupt)")
-        self.resize(900, 650)
+        self.setWindowTitle("Cortex OS — Executive Suite (v3.3 Neural Natural Voices)")
+        self.setGeometry(200, 200, 850, 620)
 
-        # Initialize Text-to-Speech (Fallback to local pyttsx3 for offline/speed)
-        self.tts_engine = pyttsx3.init()
-        self.is_speaking = False
-        self.audio_queue = queue.Queue()
-
-        # Load local Whisper model lightly if available
-        self.whisper_model = None
-        if WHISPER_AVAILABLE:
-            try:
-                self.whisper_model = whisper.load_model("tiny") # Tiny model for fast local CPU execution
-            except Exception as e:
-                print(f"Whisper load warning: {e}")
-
+        self.speech = SpeechEngine()
         self.init_ui()
 
     def init_ui(self):
-        central_widget = QWidget()
-        self.setCentralWidget(central_widget)
-        main_layout = QVBoxLayout(central_widget)
+        main_widget = QWidget()
+        self.setCentralWidget(main_widget)
+        main_layout = QVBoxLayout(main_widget)
 
-        # Tabs
+        header_layout = QHBoxLayout()
+        self.orb = VisualOrb()
+        header_layout.addWidget(self.orb)
+
+        self.status_lbl = QLabel("STATUS: ONLINE & VOICE PROFILES LOADED")
+        self.status_lbl.setStyleSheet("color: #3fb950; font-weight: bold; font-size: 11pt;")
+        header_layout.addWidget(self.status_lbl)
+        header_layout.addStretch()
+        main_layout.addLayout(header_layout)
+
         self.tabs = QTabWidget()
         main_layout.addWidget(self.tabs)
 
-        # Assistant Chat Tab
+        # Chat Tab
         chat_tab = QWidget()
         chat_layout = QVBoxLayout(chat_tab)
-
-        self.status_label = QLabel("STATUS: ONLINE & READY")
-        chat_layout.addWidget(self.status_label)
-
-        self.display_area = QTextEdit()
-        self.display_area.setReadOnly(True)
-        chat_layout.addWidget(self.display_area)
+        self.chat_area = QTextEdit()
+        self.chat_area.setReadOnly(True)
+        chat_layout.addWidget(self.chat_area)
 
         input_layout = QHBoxLayout()
-        self.input_field = QLineEdit()
-        self.input_field.setPlaceholderText("Type command or query...")
-        self.input_field.returnPressed.connect(self.send_command)
-        input_layout.addWidget(self.input_field)
+        self.cmd_input = QLineEdit()
+        self.cmd_input.setPlaceholderText("Command Cortex (e.g. 'Switch voice to Sonia', 'Open Gmail and email John')...")
+        self.cmd_input.returnPressed.connect(self.send_command)
+        input_layout.addWidget(self.cmd_input)
 
         self.send_btn = QPushButton("Send")
         self.send_btn.clicked.connect(self.send_command)
         input_layout.addWidget(self.send_btn)
 
-        # Speak / Voice Button with Auto-Interrupt Trigger
-        self.speak_btn = QPushButton("Speak / Listen")
-        self.speak_btn.clicked.connect(self.toggle_voice_listener)
-        input_layout.addWidget(self.speak_btn)
+        self.clear_btn = QPushButton("Clear Chat")
+        self.clear_btn.setObjectName("clear_btn")
+        self.clear_btn.clicked.connect(self.chat_area.clear)
+        input_layout.addWidget(self.clear_btn)
 
         chat_layout.addLayout(input_layout)
         self.tabs.addTab(chat_tab, "Assistant Chat")
 
-    def interrupt_speech(self):
-        """Auto-Interrupt: Stops any ongoing speech instantly when user inputs new action."""
-        if self.is_speaking:
-            try:
-                self.tts_engine.stop()
-                self.is_speaking = False
-            except Exception:
-                pass
+        # Settings Tab
+        settings_tab = QWidget()
+        settings_layout = QVBoxLayout(settings_tab)
+
+        form_group = QGroupBox("Voice & Neural Configuration (6 Human Profiles)")
+        form_layout = QFormLayout()
+
+        self.voice_combo = QComboBox()
+        self.voice_combo.addItems(["Sonia (Female Natural)", "Ryan (Male Executive)", "Aoife (Female Clear)",
+                                   "Liam (Male Deep)", "Clara (Female Soft)", "Marcus (Male Tactical)"])
+        form_layout.addRow(QLabel("Active Voice Persona:"), self.voice_combo)
+
+        self.speed_slider = QSlider(Qt.Horizontal)
+        self.speed_slider.setMinimum(100)
+        self.speed_slider.setMaximum(250)
+        self.speed_slider.setValue(175)
+        form_layout.addRow(QLabel("Voice Speed Rate:"), self.speed_slider)
+
+        form_group.setLayout(form_layout)
+        settings_layout.addWidget(form_group)
+        settings_layout.addStretch()
+
+        self.tabs.addTab(settings_tab, "App Settings")
 
     def send_command(self):
-        prompt = self.input_field.text().strip()
-        if not prompt:
+        text = self.cmd_input.text().strip()
+        if not text:
             return
 
-        # 1. TRIGGER AUTO-INTERRUPT
-        self.interrupt_speech()
+        self.chat_area.append(f"<b>You:</b> {text}")
+        self.cmd_input.clear()
+        self.speech.stop()
+        self.orb.set_state("active")
 
-        self.display_area.append(f"<b>You:</b> {prompt}")
-        self.input_field.clear()
+        payload = {
+            "prompt": text,
+            "voice_speed": self.speed_slider.value()
+        }
 
-        # Send to Backend API
-        threading.Thread(target=self.query_backend, args=(prompt,), daemon=True).start()
+        threading.Thread(target=self._dispatch_request, args=(payload,), daemon=True).start()
 
-    def query_backend(self, prompt):
+    def _dispatch_request(self, payload):
         try:
-            res = requests.post("http://127.0.0.1:8000/query", json={"prompt": prompt, "user_id": "default"}, timeout=30)
-            if res.status_code == 200:
-                answer = res.json().get("response", "No response received.")
-                self.display_area.append(f"<b>Cortex:</b> {answer}")
-                self.speak_response(answer)
+            r = requests.post("http://127.0.0.1:8000/query", json=payload, timeout=25)
+            if r.status_code == 200:
+                data = r.json()
+                resp_text = data.get("response", "")
+                self.chat_area.append(f"<b>Cortex:</b> {resp_text}\n")
+                self.orb.set_state("speaking")
+
+                # Map selected combo index to speech engine voice profile
+                v_index = self.voice_combo.currentIndex()
+                self.speech.speak(resp_text, speed=payload["voice_speed"], voice_index=v_index, callback=lambda: self.orb.set_state("ready"))
             else:
-                self.display_area.append(f"<b>Cortex:</b> Error communicating with backend server.")
+                self.chat_area.append(f"<b>Cortex Error:</b> {r.text}\n")
+                self.orb.set_state("ready")
         except Exception as e:
-            self.display_area.append(f"<b>Cortex:</b> Unable to connect to Brain server. ({e})")
-
-    def speak_response(self, text):
-        """Threaded local speech synthesis with interrupt safety."""
-        def speak_worker():
-            self.is_speaking = True
-            try:
-                self.tts_engine.say(text)
-                self.tts_engine.runAndWait()
-            except Exception:
-                pass
-            self.is_speaking = False
-
-        threading.Thread(target=speak_worker, daemon=True).start()
-
-    def toggle_voice_listener(self):
-        """Listens using local Whisper when offline/online seamlessly."""
-        self.interrupt_speech()
-        self.display_area.append("<i>[Listening via Whisper audio engine...]</i>")
-
-        # Placeholder for local audio recording & Whisper transcription execution
-        if self.whisper_model:
-            # Here you would record a temporary .wav audio snippet and run:
-            # result = self.whisper_model.transcribe("temp_audio.wav")
-            # prompt = result["text"]
-            pass
-        else:
-            self.display_area.append("<i>[Whisper model not initialized. Please type command.]</i>")
+            self.chat_area.append(f"<b>Cortex Error:</b> {str(e)}\n")
+            self.orb.set_state("ready")
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    client = CortexAgentClient()
-    client.show()
+    app.setStyleSheet(DARK_THEME_STYLE)
+    win = CortexUI()
+    win.show()
     sys.exit(app.exec_())

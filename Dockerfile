@@ -7,10 +7,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt .
+COPY cortex-brain/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY . .
+# Copy all root project files (including main.py)
+COPY cortex-brain/venv/Lib/site-packages/pip/_vendor .
 
 EXPOSE 8000
 
